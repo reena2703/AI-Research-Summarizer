@@ -1,61 +1,69 @@
 import os
+import requests
 from dotenv import load_dotenv
-from openai import OpenAI
 
-# Load API key from .env
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def review_draft(draft_text):
-    """
-    Uses GPT to review and refine the generated research draft.
+INPUT_FILE = "app/output/final_research_draft.txt"
+OUTPUT_FILE = "app/output/reviewed_research_draft.txt"
 
-    Output Format:
-    1. Improvements Needed (bullet points)
-    2. Revised Draft (clean, improved academic writing)
-    """
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")   # must exist in .env
 
-    prompt = f"""
-You are an expert academic editor.
+MODEL = "facebook/bart-large-cnn"
+API_URL = f"https://router.huggingface.co/hf-inference/models/{MODEL}"
 
-Review and improve the following research draft:
+HEADERS = {
+    "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
+    "Content-Type": "application/json"
+}
 
-DRAFT:
-{draft_text}
 
-Your response must follow EXACTLY this structure:
+def hf_summarize(text):
+    payload = {
+        "inputs": text,
+        "parameters": {
+            "min_length": 200,
+            "max_length": 400
+        }
+    }
 
-1. **Improvements Needed**
-Provide 6–8 bullet points focusing on:
-- clarity
-- academic tone
-- structure/organization
-- logical flow
-- coherence
-- grammar & vocabulary
-- completeness of arguments
-- citation consistency
+    response = requests.post(API_URL, headers=HEADERS, json=payload, timeout=90)
 
-2. **Revised Draft**
-Provide a polished, fully improved version of the draft.
-Rules:
-- Maintain the original meaning.
-- Improve academic tone.
-- Fix grammar and flow.
-- Do NOT invent new research data.
+    if response.status_code != 200:
+        raise Exception(f"HuggingFace API Error: {response.text}")
+
+    result = response.json()
+
+    # router always returns list
+    return result[0]["summary_text"]
+
+
+def review_draft(text=None):
+    if text is None:
+        if not os.path.exists(INPUT_FILE):
+            return "❌ No draft found"
+        with open(INPUT_FILE, "r", encoding="utf-8") as f:
+            text = f.read()
+
+    print("🤖 Sending draft to HuggingFace Reviewer...")
+
+    refined_text = hf_summarize(text)
+
+    reviewed_content = f"""
+================ REVIEWED RESEARCH DRAFT =================
+
+REFINED REVIEW OUTPUT
+{refined_text}
+
+Notes:
+This version improves clarity, structure, grammar, and academic tone while
+keeping meaning intact.
+
+==========================================================
 """
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1200,
-            temperature=0.3
-        )
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(reviewed_content)
 
-        # Return cleaned content
-        return response.choices[0].message["content"]
-
-    except Exception as e:
-        print(f"❌ Error reviewing draft: {e}")
-        return "Review process failed due to an unexpected error."
+    print(f"✅ Reviewed draft saved → {OUTPUT_FILE}")
+    return reviewed_content

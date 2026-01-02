@@ -1,17 +1,15 @@
 import os
 import json
-from dotenv import load_dotenv
-from openai import OpenAI
-
-# Load API key
-load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+import requests
 
 INPUT_FILE = "app/output/combined_abstracts.json"
 OUTPUT_FILE = "app/output/final_research_draft.txt"
 
+HF_MODEL = "facebook/bart-large-cnn"
+HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
-def load_combined_summaries():
+
+def load_combined():
     if not os.path.exists(INPUT_FILE):
         raise FileNotFoundError("combined_abstracts.json not found")
 
@@ -19,41 +17,66 @@ def load_combined_summaries():
         return json.load(f)
 
 
-def generate_research_draft(combined_data):
-    prompt = f"""
-You are an expert academic researcher.
+def hf_summarize(text):
+    url = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}"
 
-Using the following structured summaries from MULTIPLE research papers,
-generate a complete **Research Review Draft**.
+    headers = {"Content-Type": "application/json"}
+    if HF_API_KEY:
+        headers["Authorization"] = f"Bearer {HF_API_KEY}"
 
-CONTENT:
-{json.dumps(combined_data, indent=2)}
+    payload = {
+        "inputs": text,
+        "parameters": {"min_length": 180, "max_length": 400}
+    }
 
-Your output MUST include the following sections:
+    response = requests.post(url, headers=headers, json=payload, timeout=90)
+    result = response.json()
 
-1. Abstract (100–150 words)
-2. Introduction
-3. Methodology Comparison
-4. Results Synthesis (similarities and differences)
-5. Key Findings (bullet points)
-6. Limitations
-7. Conclusion
-8. References (APA-style, based on titles/authors provided)
+    if isinstance(result, list):
+        return result[0]["summary_text"]
 
-Rules:
-- Use academic English
-- Synthesize across papers (do NOT summarize one-by-one)
-- Do NOT invent new data
-"""
+    return "Summary generation failed"
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1200,
-        temperature=0.4
+
+def generate_research_draft(data):
+    summaries = "\n".join(p["summary"] for p in data)
+    findings = "\n".join(p.get("key_findings", "") for p in data)
+
+    abstract = hf_summarize(
+        "Write an academic abstract based on the following research summaries:\n" + summaries
     )
 
-    return response.choices[0].message.content
+    methods = hf_summarize(
+        "Compare and summarize the research methods used in the following papers:\n" + summaries
+    )
+
+    results = hf_summarize(
+        "Synthesize the key results and findings from these studies:\n" + findings
+    )
+
+    references = "\n".join(
+        f"{i+1}. {p['title']}. Retrieved from Semantic Scholar."
+        for i, p in enumerate(data)
+    )
+
+    draft = f"""
+================ RESEARCH REVIEW =================
+
+ABSTRACT
+{abstract}
+
+METHODS
+{methods}
+
+RESULTS
+{results}
+
+REFERENCES (APA Style)
+{references}
+
+=================================================
+"""
+    return draft
 
 
 def save_draft(text):
@@ -64,8 +87,8 @@ def save_draft(text):
 
 
 def generate_draft():
-    print("📝 Generating research review draft...")
-    combined_data = load_combined_summaries()
-    draft = generate_research_draft(combined_data)
+    print("📝 Generating structured research draft (Milestone 3)...")
+    data = load_combined()
+    draft = generate_research_draft(data)
     save_draft(draft)
     return draft

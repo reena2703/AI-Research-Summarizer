@@ -4,6 +4,9 @@ import os
 PAPERS_DIR = "app/papers"
 TEXT_DIR = "app/papers/text"
 
+# Section headers to detect
+SECTIONS = ["abstract", "methods", "methodology", "results", "conclusion"]
+
 
 def ensure_text_folder():
     """
@@ -11,25 +14,23 @@ def ensure_text_folder():
     """
     if not os.path.exists(TEXT_DIR):
         os.makedirs(TEXT_DIR)
-        print(f"Created folder: {TEXT_DIR}")
+        print(f"📁 Created folder: {TEXT_DIR}")
 
 
 def extract_text_from_pdf(pdf_path):
     """
-    Extracts text from a PDF using PyMuPDF.
-    Returns extracted text as a single large string.
+    Extracts raw text from a PDF using PyMuPDF.
+    Returns extracted text as a single string.
     """
     try:
         doc = fitz.open(pdf_path)
         full_text = ""
 
-        for page_num, page in enumerate(doc, start=1):
+        for page in doc:
             try:
-                text = page.get_text("text")
+                full_text += page.get_text("text")
             except Exception:
-                text = ""
-
-            full_text += f"\n\n--- Page {page_num} ---\n{text}"
+                pass
 
         doc.close()
         return full_text
@@ -39,11 +40,47 @@ def extract_text_from_pdf(pdf_path):
         return ""
 
 
+def extract_sections(text):
+    """
+    Extract section-wise text (Abstract, Methods, Results).
+    """
+    text_lower = text.lower()
+    sections_data = {}
+
+    for i, section in enumerate(SECTIONS):
+        if section in text_lower:
+            start = text_lower.find(section)
+            end = len(text_lower)
+
+            for next_section in SECTIONS[i + 1:]:
+                pos = text_lower.find(next_section)
+                if pos != -1:
+                    end = pos
+                    break
+
+            sections_data[section] = text[start:end].strip()
+
+    return sections_data
+
+
+def validate_sections(sections):
+    """
+    Simple validation to check required sections.
+    """
+    required = ["abstract", "methods", "results"]
+    missing = [sec for sec in required if sec not in sections]
+
+    if missing:
+        print(f"⚠ Missing sections: {missing}")
+        return False
+
+    return True
+
+
 def extract_all_papers():
     """
     Extract text from ALL PDFs stored in app/papers/
-    Save them as .txt files inside app/papers/text/
-    Returns a list of the created .txt file paths.
+    Save section-wise text into app/papers/text/
     """
     ensure_text_folder()
     extracted_files = []
@@ -62,18 +99,27 @@ def extract_all_papers():
         pdf_path = os.path.join(PAPERS_DIR, filename)
         print(f"📄 Extracting text from: {pdf_path}")
 
-        text = extract_text_from_pdf(pdf_path)
+        full_text = extract_text_from_pdf(pdf_path)
 
-        if text.strip():
-            txt_filename = filename.replace(".pdf", ".txt")
-            txt_path = os.path.join(TEXT_DIR, txt_filename)
+        if not full_text.strip():
+            print(f"⚠ No readable text found in {filename}")
+            continue
 
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write(text)
+        sections = extract_sections(full_text)
 
-            print(f"✅ Saved extracted text → {txt_path}")
-            extracted_files.append(txt_path)
-        else:
-            print(f"⚠ Extraction failed or PDF contained no readable text: {filename}")
+        # ✅ VALIDATION USED CORRECTLY
+        if not validate_sections(sections):
+            print("⚠ Incomplete paper — still saved for reference")
+
+        txt_filename = filename.replace(".pdf", "_sections.txt")
+        txt_path = os.path.join(TEXT_DIR, txt_filename)
+
+        with open(txt_path, "w", encoding="utf-8") as f:
+            for sec, content in sections.items():
+                f.write(f"\n\n===== {sec.upper()} =====\n")
+                f.write(content)
+
+        print(f"✅ Section-wise text saved → {txt_path}")
+        extracted_files.append(txt_path)
 
     return extracted_files

@@ -1,45 +1,57 @@
-import os
 from dotenv import load_dotenv
 import gradio as gr
 
-# Import all modules
+# Import modules
 from modules.retrieval import download_papers
 from modules.extract import extract_all_papers
 from modules.analyze import analyze_all
 from modules.draft import generate_draft
 from modules.review import review_draft
 
-# Load API keys
+# Load environment variables
 load_dotenv()
 
 
 def full_pipeline(topic):
     """
-    Runs the entire research summarization pipeline.
+    Runs the entire ONLINE research summarization pipeline
+    based on USER TOPIC input.
     """
     try:
-        # Step 1: Download Papers
+        if not topic or topic.strip() == "":
+            return "❌ Please enter a research topic."
+
+        print(f"\n🔍 USER SELECTED TOPIC → {topic}\n")
+
+        # Step 1: Retrieve papers
+        print("📥 Fetching research papers...")
         papers = download_papers(topic)
         if not papers:
             return "❌ No papers found. Try another topic."
 
-        # Step 2: Extract text from downloaded PDFs
+        # Step 2: Extract PDF text
+        print("📄 Extracting paper content...")
         extracted = extract_all_papers()
         if not extracted:
-            return "❌ Could not extract text from PDFs."
+            return "❌ Text extraction failed."
 
-        # Step 3: Analyze each paper using GPT
+        # Step 3: Analyze papers
+        print("🧠 Generating AI paper summaries...")
         summaries = analyze_all()
         if not summaries:
-            return "❌ Failed to summarize papers."
+            return "❌ Paper analysis failed."
 
-        # Step 4: Generate draft of research review
-        draft = generate_draft(summaries)
+        # Step 4: Generate research draft
+        print("📝 Creating structured research draft...")
+        draft = generate_draft()
         if not draft:
             return "❌ Draft generation failed."
 
-        # Step 5: Final review to improve structure & clarity
+        # Step 5: Review draft
+        print("🤖 Improving academic quality...")
         reviewed = review_draft(draft)
+
+        print("✅ Pipeline Completed Successfully!")
         return reviewed
 
     except Exception as e:
@@ -47,29 +59,29 @@ def full_pipeline(topic):
 
 
 def launch_app():
-    # Gradio 6.x → NO theme parameter in Blocks()
     with gr.Blocks() as demo:
 
-        gr.Markdown("## 🧠 AI Research Paper Summarizer")
-        
-        gr.Markdown("""
-### What this system does:
+        gr.Markdown("## 🧠 AI Research Paper Summarizer (Online Mode)")
 
-1. 🔍 Searches Semantic Scholar for related papers  
-2. 📥 Downloads available research PDFs  
-3. 📄 Extracts text from each paper  
-4. 🧠 Uses GPT to analyze & summarize each paper  
-5. 📝 Generates a combined research draft  
-6. ✅ Reviews & improves the final research output  
+        gr.Markdown("""
+### ✅ Updated Pipeline  
+
+1️⃣ User enters ANY research topic  
+2️⃣ System searches Semantic Scholar  
+3️⃣ Downloads available research papers  
+4️⃣ Extracts text from PDFs  
+5️⃣ Summarizes using HuggingFace  
+6️⃣ Generates structured research draft  
+7️⃣ Refines and reviews final output  
 """)
 
         topic_input = gr.Textbox(
             label="Enter Research Topic",
-            placeholder="Example: Deep Learning in Healthcare",
+            placeholder="Example: Deep Learning in Healthcare"
         )
 
         output_box = gr.Textbox(
-            label="Final Research Draft (Reviewed)",
+            label="Final Reviewed Research Draft",
             lines=30
         )
 

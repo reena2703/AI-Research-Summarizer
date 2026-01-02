@@ -7,25 +7,20 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Read Semantic Scholar API key (optional but recommended)
 SEMANTIC_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
 
 PAPERS_DIR = "app/papers"
-RATE_LIMIT_SECONDS = 1  # Semantic Scholar guideline (1 RPS)
+RATE_LIMIT_SECONDS = 1  # Semantic Scholar guideline
 
 
 def ensure_papers_folder():
-    """Create papers folder if it does not exist."""
     if not os.path.exists(PAPERS_DIR):
         os.makedirs(PAPERS_DIR)
 
 
 def search_semantic_scholar(query, limit=5):
-    """
-    Search Semantic Scholar for papers related to a topic.
-    Uses API key if available, otherwise falls back to public access.
-    """
     url = "https://api.semanticscholar.org/graph/v1/paper/search"
+
     params = {
         "query": query,
         "limit": limit,
@@ -36,7 +31,7 @@ def search_semantic_scholar(query, limit=5):
     if SEMANTIC_API_KEY:
         headers["x-api-key"] = SEMANTIC_API_KEY
 
-    for attempt in range(3):  # retry logic
+    for attempt in range(3):
         try:
             response = requests.get(
                 url,
@@ -55,17 +50,12 @@ def search_semantic_scholar(query, limit=5):
 
 
 def save_metadata(metadata, filename):
-    """Save paper metadata as JSON."""
     path = os.path.join(PAPERS_DIR, filename)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=4)
 
 
 def download_papers(topic):
-    """
-    Downloads open-access research PDFs and stores metadata JSON.
-    Prepares dataset for analysis.
-    """
     ensure_papers_folder()
     papers = search_semantic_scholar(topic)
 
@@ -74,6 +64,10 @@ def download_papers(topic):
         return []
 
     saved_files = []
+
+    headers = {}
+    if SEMANTIC_API_KEY:
+        headers["x-api-key"] = SEMANTIC_API_KEY
 
     for idx, paper in enumerate(papers, start=1):
         pdf_info = paper.get("openAccessPdf")
@@ -86,34 +80,56 @@ def download_papers(topic):
         pdf_name = f"paper_{idx}.pdf"
         json_name = f"paper_{idx}.json"
 
-        try:
-            print(f"⬇ Downloading: {pdf_name}")
+        success = False
 
-            pdf_response = requests.get(pdf_url, timeout=20)
-            pdf_response.raise_for_status()
+        for attempt in range(3):   # <-- retry logic
+            try:
+                print(f"⬇ Downloading attempt {attempt+1}: {pdf_name}")
 
-            # Save PDF
-            with open(os.path.join(PAPERS_DIR, pdf_name), "wb") as f:
-                f.write(pdf_response.content)
+                response = requests.get(
+                    pdf_url,
+                    headers=headers,
+                    timeout=60,      # <-- longer time
+                    stream=True
+                )
+                response.raise_for_status()
 
-            # Save metadata
-            metadata = {
-                "topic": topic,
-                "paperId": paper.get("paperId"),
-                "title": paper.get("title"),
-                "year": paper.get("year"),
-                "authors": [a["name"] for a in paper.get("authors", [])],
-                "pdf_url": pdf_url,
-                "source": "Semantic Scholar"
-            }
+                # Validate PDF
+                if "pdf" not in response.headers.get("Content-Type", ""):
+                    print("⏭ Not a valid PDF, skipping")
+                    break
 
-            save_metadata(metadata, json_name)
-            saved_files.append(pdf_name)
+                # Stream save
+                with open(os.path.join(PAPERS_DIR, pdf_name), "wb") as f:
+                    for chunk in response.iter_content(chunk_size=2048):
+                        if chunk:
+                            f.write(chunk)
 
-            time.sleep(RATE_LIMIT_SECONDS)
+                success = True
+                break
 
-        except Exception as e:
-            print(f"⚠ Failed to download {pdf_url}: {e}")
+            except Exception as e:
+                print(f"⚠ Retry {attempt+1} failed: {e}")
+                time.sleep(3)
+
+        if not success:
+            print("❌ Failed after 3 attempts — skipping")
+            continue
+
+        metadata = {
+            "topic": topic,
+            "paperId": paper.get("paperId"),
+            "title": paper.get("title"),
+            "year": paper.get("year"),
+            "authors": [a["name"] for a in paper.get("authors", [])],
+            "pdf_url": pdf_url,
+            "source": "Semantic Scholar"
+        }
+
+        save_metadata(metadata, json_name)
+        saved_files.append(pdf_name)
+
+        time.sleep(RATE_LIMIT_SECONDS)
 
     print(f"\n📁 Dataset ready → {len(saved_files)} papers downloaded.")
     return saved_files

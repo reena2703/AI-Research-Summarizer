@@ -1,14 +1,16 @@
 import os
 import json
-from openai import OpenAI
+import time
+import requests
 from dotenv import load_dotenv
 
-# Load API Key
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 TEXT_DIR = "app/papers/text"
 OUTPUT_DIR = "app/output"
+
+HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+HF_MODEL = "facebook/bart-large-cnn"
 
 
 def ensure_output_folder():
@@ -16,107 +18,125 @@ def ensure_output_folder():
         os.makedirs(OUTPUT_DIR)
 
 
-def extract_abstract(text):
-    """
-    Extract abstract section heuristically.
-    """
-    lower = text.lower()
+# -------- ABSTRACT EXTRACTION --------
+def extract_abstract(text: str) -> str:
+    text_lower = text.lower()
 
-    if "abstract" in lower:
-        start = lower.find("abstract")
-        end = lower.find("introduction")
+    if "abstract" in text_lower:
+        start = text_lower.find("abstract")
+        end = text_lower.find("introduction")
 
         if end != -1:
             return text[start:end].strip()
+
         return text[start:].strip()
 
-    return text[:1500]  # fallback
+    return text[:1500]
 
 
-def summarize_abstract(title, abstract):
-    prompt = f"""
-You are an expert AI research assistant.
+# -------- KEY FINDINGS EXTRACTION --------
+def extract_key_findings(results_text):
+    """
+    Extract key findings from Results section using HuggingFace.
+    """
+    prompt = (
+        "Extract the key findings and results from the following research text:\n\n"
+        + results_text[:2000]
+    )
 
-Summarize the following research paper abstract into EXACTLY these sections:
-
-1. Background
-2. Objective
-3. Methods
-4. Results
-5. Conclusion
-
-Use concise academic language.
-
-TITLE: {title}
-
-ABSTRACT:
-{abstract}
-"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
-            temperature=0.3
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"Summary generation failed: {e}"
+    return hf_summarize(prompt)
 
 
+# -------- HUGGINGFACE SUMMARIZER --------
+def hf_summarize(text):
+    url = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}"
+
+    headers = {"Content-Type": "application/json"}
+
+    if HF_API_KEY:
+        headers["Authorization"] = f"Bearer {HF_API_KEY}"
+
+    payload = {
+        "inputs": text,
+        "parameters": {"min_length": 120, "max_length": 300}
+    }
+
+    for attempt in range(3):
+        try:
+            print(f"   🔹 HuggingFace request attempt {attempt + 1}")
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+
+            result = response.json()
+
+            if isinstance(result, list) and "summary_text" in result[0]:
+                return result[0]["summary_text"]
+
+            return "Summarization failed"
+
+        except Exception as e:
+            print(f"   ⚠ HF error attempt {attempt+1}: {e}")
+            time.sleep(2)
+
+    return "❌ Failed to summarize due to repeated HF failures."
+
+
+# -------- MAIN ANALYSIS PIPELINE --------
 def analyze_all():
-    """
-    Milestone 2 complete analysis:
-    - Extract abstracts
-    - Generate structured summaries
-    - Save per-paper JSON
-    - Save combined comparison-ready JSON
-    """
     ensure_output_folder()
 
-    combined_results = []
+    if not os.path.exists(TEXT_DIR):
+        print("❌ No text folder found.")
+        return None
 
     files = [f for f in os.listdir(TEXT_DIR) if f.endswith(".txt")]
 
     if not files:
-        print("❌ No extracted text files found.")
-        return
+        print("❌ No text files found.")
+        return None
+
+    combined = []
 
     for file in files:
-        path = os.path.join(TEXT_DIR, file)
         print(f"\n📘 Analyzing: {file}")
 
-        with open(path, "r", encoding="utf-8") as f:
-            full_text = f.read()
+        path = os.path.join(TEXT_DIR, file)
 
-        abstract = extract_abstract(full_text)
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+
+        # Abstract summary
+        abstract = extract_abstract(text)
+        summary = hf_summarize(abstract)
+
+        # Key findings from Results section
+        results_section = text.lower().split("results")[-1][:3000]
+        key_findings = extract_key_findings(results_section)
+
         title = file.replace(".txt", "").replace("_", " ").title()
 
-        summary = summarize_abstract(title, abstract)
-
-        paper_result = {
+        result = {
             "title": title,
             "source_file": file,
-            "summary": summary
+            "summary": summary,
+            "key_findings": key_findings
         }
 
-        # Save individual summary
-        output_path = os.path.join(
+        out_path = os.path.join(
             OUTPUT_DIR,
             file.replace(".txt", "_summary.json")
         )
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(paper_result, f, indent=4)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=4)
 
-        print(f"✅ Saved summary → {output_path}")
+        print(f"✅ Saved summary → {out_path}")
+        combined.append(result)
 
-        combined_results.append(paper_result)
-
-    # Save combined file for comparison
     combined_path = os.path.join(OUTPUT_DIR, "combined_abstracts.json")
     with open(combined_path, "w", encoding="utf-8") as f:
-        json.dump(combined_results, f, indent=4)
+        json.dump(combined, f, indent=4)
 
     print(f"\n📊 Combined dataset ready → {combined_path}")
+    return combined
+
